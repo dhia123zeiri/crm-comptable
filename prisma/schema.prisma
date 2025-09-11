@@ -1,0 +1,403 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id               Int        @id @default(autoincrement())
+  nom              String
+  email            String     @unique
+  password         String
+  dateCreation     DateTime   @default(now())
+  dateModification DateTime   @updatedAt
+  actif            Boolean    @default(true)
+  role             Role       @default(COMPTABLE)
+  client           Client?
+  comptable        Comptable?
+
+  @@map("users")
+}
+
+model Client {
+  id                Int              @id @default(autoincrement())
+  userId            Int              @unique
+  siret             String           @unique
+  raisonSociale     String
+  adresse           String?
+  codePostal        String?
+  ville             String?
+  telephone         String?
+  typeActivite      String?
+  regimeFiscal      String?
+  derniereConnexion DateTime?
+  comptableId       Int
+  comptable         Comptable        @relation(fields: [comptableId], references: [id])
+  user              User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documents         Document[]
+  echeances         Echeance[]
+  emailLogs         EmailLog[]
+  formulaires       Formulaire[]
+  notifications     Notification[]
+  taches            Tache[]
+  templates         TemplateClient[]
+  dynamicFormResponses DynamicFormResponse[]
+
+  @@map("clients")
+}
+
+model Comptable {
+  id               Int            @id @default(autoincrement())
+  userId           Int            @unique
+  cabinet          String
+  specialites      String[]
+  numeroOrdre      String?
+  dateCreation     DateTime       @default(now())
+  dateModification DateTime       @updatedAt
+  clients          Client[]
+  documents        Document[]     // Add this line
+  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  notifications    Notification[]
+  taches           Tache[]
+  templates        Template[]
+  dynamicForms     DynamicForm[]
+
+  @@map("comptables")
+}
+
+model Template {
+  nom              String
+  subject          String
+  content          String
+  type             TemplateType
+  actif            Boolean          @default(true)
+  dateCreation     DateTime         @default(now())
+  dateModification DateTime         @updatedAt
+  comptableId      Int
+  category         String
+  usageCount       Int              @default(0)
+  variables        String[]
+  id               Int              @id @default(autoincrement())
+  cronExpression   String?
+  isPeriodic       Boolean          @default(false)
+  lastExecutionAt  DateTime?
+  nextExecutionAt  DateTime?
+  includeForm      Boolean          @default(false)
+  dynamicFormId    Int?
+  emailLogs        EmailLog[]
+  clients          TemplateClient[]
+  comptable        Comptable        @relation(fields: [comptableId], references: [id])
+  dynamicForm      DynamicForm?     @relation(fields: [dynamicFormId], references: [id])
+
+  @@map("templates")
+}
+
+model DynamicForm {
+  id                   Int                   @id @default(autoincrement())
+  title                String
+  description          String?
+  fields               Json                  // Array of field definitions
+  expirationDays       Int                   @default(30)
+  requiresAuthentication Boolean             @default(true)
+  isActive             Boolean               @default(true)
+  dateCreation         DateTime              @default(now())
+  dateModification     DateTime              @updatedAt
+  comptableId          Int
+  comptable            Comptable             @relation(fields: [comptableId], references: [id])
+  templates            Template[]
+  responses            DynamicFormResponse[]
+
+  @@map("dynamic_forms")
+}
+
+model DynamicFormResponse {
+  id               Int         @id @default(autoincrement())
+  responses        Json        // Field responses as key-value pairs
+  status           FormResponseStatus @default(PENDING)
+  dateCreation     DateTime    @default(now())
+  dateCompletion   DateTime?
+  dateExpiration   DateTime
+  ipAddress        String?
+  userAgent        String?
+  clientId         Int
+  dynamicFormId    Int
+  emailLogId       Int?
+  client           Client      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  dynamicForm      DynamicForm @relation(fields: [dynamicFormId], references: [id], onDelete: Cascade)
+  emailLog         EmailLog?   @relation(fields: [emailLogId], references: [id])
+
+  @@map("dynamic_form_responses")
+}
+
+model TemplateClient {
+  id              Int      @id @default(autoincrement())
+  templateId      Int
+  clientId        Int
+  dateAssignation DateTime @default(now())
+  actif           Boolean  @default(true)
+  client          Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  template        Template @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@unique([templateId, clientId])
+  @@map("template_clients")
+}
+
+model EmailLog {
+  id          Int          @id @default(autoincrement())
+  subject     String
+  content     String
+  token       String       @unique @default(uuid())
+  status      EmailStatus  @default(SENT)
+  messageId   String?
+  error       String?
+  sentAt      DateTime     @default(now())
+  openedAt    DateTime?
+  clickedAt   DateTime?
+  respondedAt DateTime?
+  templateId  Int
+  clientId    Int
+  client      Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  template    Template     @relation(fields: [templateId], references: [id])
+  formulaires Formulaire[]
+  dynamicFormResponses DynamicFormResponse[]
+
+  @@map("email_logs")
+}
+
+model Formulaire {
+  id             Int              @id @default(autoincrement())
+  titre          String
+  description    String?
+  champs         Json
+  reponses       Json?
+  status         FormulaireStatus @default(PENDING)
+  dateCreation   DateTime         @default(now())
+  dateCompletion DateTime?
+  dateExpiration DateTime?
+  clientId       Int
+  emailLogId     Int?
+  documents      Document[]
+  client         Client           @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  emailLog       EmailLog?        @relation(fields: [emailLogId], references: [id])
+
+  @@map("formulaires")
+}
+
+model Document {
+  id               Int          @id @default(autoincrement())
+  nom              String
+  nomOriginal      String
+  chemin           String
+  taille           Int
+  typeDocument     TypeDocument
+  typeFichier      String
+  dateUpload       DateTime     @default(now())
+  dateModification DateTime     @updatedAt
+  clientId         Int
+  comptableId      Int          // Add this field
+  formulaireId     Int?
+  client           Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  comptable        Comptable    @relation(fields: [comptableId], references: [id]) // Add this relation
+  formulaire       Formulaire?  @relation(fields: [formulaireId], references: [id])
+
+  @@map("documents")
+}
+
+model Tache {
+  id             Int         @id @default(autoincrement())
+  titre          String
+  description    String?
+  type           TypeTache
+  priorite       Priorite    @default(MOYENNE)
+  status         StatusTache @default(PENDING)
+  dateCreation   DateTime    @default(now())
+  dateEcheance   DateTime?
+  dateCompletion DateTime?
+  clientId       Int
+  comptableId    Int
+  echeances      Echeance[]
+  client         Client      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  comptable      Comptable   @relation(fields: [comptableId], references: [id])
+
+  @@map("taches")
+}
+
+model Echeance {
+  id           Int            @id @default(autoincrement())
+  titre        String
+  description  String?
+  type         TypeEcheance
+  dateEcheance DateTime
+  dateRappel   DateTime?
+  status       StatusEcheance @default(ACTIVE)
+  montant      Float?
+  reference    String?
+  clientId     Int
+  tacheId      Int?
+  client       Client         @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  tache        Tache?         @relation(fields: [tacheId], references: [id])
+
+  @@map("echeances")
+}
+
+model Notification {
+  id           Int              @id @default(autoincrement())
+  titre        String
+  message      String
+  type         TypeNotification
+  lu           Boolean          @default(false)
+  dateCreation DateTime         @default(now())
+  dateLecture  DateTime?
+  clientId     Int?
+  comptableId  Int?
+  client       Client?          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  comptable    Comptable?       @relation(fields: [comptableId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+model JobCron {
+  id                 Int            @id @default(autoincrement())
+  nom                String
+  description        String?
+  expression         String
+  type               TypeJob
+  actif              Boolean        @default(true)
+  derniereExecution  DateTime?
+  prochaineExecution DateTime?
+  parametres         Json?
+  dateCreation       DateTime       @default(now())
+  logs               LogExecution[]
+
+  @@map("jobs_cron")
+}
+
+model LogExecution {
+  id            Int             @id @default(autoincrement())
+  jobId         Int
+  status        StatusExecution
+  message       String?
+  duree         Int?
+  dateExecution DateTime        @default(now())
+  job           JobCron         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@map("logs_execution")
+}
+
+enum Role {
+  ADMIN
+  CLIENT
+  COMPTABLE
+}
+
+enum EmailStatus {
+  DRAFT
+  SENT
+  OPENED
+  CLICKED
+  RESPONDED
+  FAILED
+}
+
+enum TemplateType {
+  REMINDER
+  INVOICE
+  INFO
+  CUSTOM
+}
+
+enum FormulaireStatus {
+  PENDING
+  STARTED
+  COMPLETED
+  EXPIRED
+  CANCELLED
+}
+
+enum FormResponseStatus {
+  PENDING
+  STARTED
+  COMPLETED
+  EXPIRED
+  CANCELLED
+}
+
+enum TypeDocument {
+  FACTURE_VENTE
+  FACTURE_ACHAT
+  RELEVE_BANCAIRE
+  BULLETIN_PAIE
+  JUSTIFICATIF
+  CONTRAT
+  DECLARATION
+  AUTRE
+}
+
+enum TypeTache {
+  TVA
+  SOCIAL
+  BILAN
+  LIASSE_FISCALE
+  RELANCE_CLIENT
+  AUTRE
+}
+
+enum Priorite {
+  BASSE
+  MOYENNE
+  HAUTE
+  URGENTE
+}
+
+enum StatusTache {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  OVERDUE
+}
+
+enum TypeEcheance {
+  TVA_MENSUELLE
+  TVA_TRIMESTRIELLE
+  CHARGES_SOCIALES
+  DECLARATION_ANNUELLE
+  LIASSE_FISCALE
+  AUTRE
+}
+
+enum StatusEcheance {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+  OVERDUE
+}
+
+enum TypeNotification {
+  EMAIL_ENVOYE
+  FORMULAIRE_COMPLETE
+  ECHEANCE_PROCHE
+  TACHE_ASSIGNEE
+  DOCUMENT_RECU
+  RAPPEL
+  ERREUR
+}
+
+enum TypeJob {
+  ENVOI_EMAIL
+  RAPPEL_ECHEANCE
+  NETTOYAGE_FICHIERS
+  SAUVEGARDE
+  STATISTIQUES
+  ENVOI_EMAIL_TEMPLATE
+}
+
+enum StatusExecution {
+  SUCCESS
+  ERROR
+  WARNING
+  CANCELLED
+}
