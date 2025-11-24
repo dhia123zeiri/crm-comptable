@@ -18,6 +18,11 @@ import { DynamicFormsModule } from './dynamic-forms/dynamic-forms.module';
 // Security middleware
 import { FormSecurityMiddleware } from './common/middleware/form-security.middleware';
 import { DocumentsModule } from './documents/documents.module';
+import { DossierModule } from './dossier/dossier.module';
+import { CaissesModule } from './caisses/caisses.module';
+import { FacturesModule } from './factures/factures.module';
+import { CheckoutModule } from './checkout/checkout.module';
+import { FormResponsesModule } from './form-responses/form-responses.module';
 
 @Module({
   imports: [
@@ -102,6 +107,11 @@ import { DocumentsModule } from './documents/documents.module';
     CronSchedulerModule,
     DynamicFormsModule,
     DocumentsModule,
+    DossierModule,
+    CaissesModule,
+    FacturesModule,
+    CheckoutModule,
+    FormResponsesModule,
   ],
   controllers: [],
   providers: [

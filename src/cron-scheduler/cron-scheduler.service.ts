@@ -52,9 +52,9 @@ export class CronSchedulerService {
           this.logger.log(`🚀 Executing periodic template: "${template.nom}" (ID: ${template.id})`);
           
           // Execute the template
-          const result = await this.templateEmailsService.executePeriodic(template.id);
+          //const result = await this.templateEmailsService.executePeriodic(template.id);
           
-          this.logger.log(`✅ Template "${template.nom}" executed successfully. Sent: ${result.success}, Failed: ${result.failed}`);
+          //this.logger.log(`✅ Template "${template.nom}" executed successfully. Sent: ${result.success}, Failed: ${result.failed}`);
           
         } catch (error) {
           this.logger.error(`❌ Failed to execute template ${template.id} ("${template.nom}"):`, error.message);

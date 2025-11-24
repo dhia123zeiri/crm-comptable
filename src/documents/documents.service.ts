@@ -1,6 +1,6 @@
 // documents.service.ts - Version modifiée pour gérer les fichiers temporaires
 
-import { Injectable, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { Document, TypeDocument, Prisma } from '@prisma/client';
 import * as fs from 'fs';
@@ -190,6 +190,100 @@ export class DocumentsService {
         documentsPerClient: files.length,
         documentsPerClientTotal: files.length * clientIds.length
       }
+    };
+  }
+
+
+  async getClientDocuments(userId: number) {
+    // First, get the client record
+    const client = await this.prisma.client.findUnique({
+      where: { userId }
+    });
+
+    if (!client) {
+      throw new ForbiddenException('Client non trouvé');
+    }
+
+    // Get all documents for this client
+    const documents = await this.prisma.document.findMany({
+      where: { clientId: client.id },
+      orderBy: { dateUpload: 'desc' }
+    });
+
+    return documents;
+  }
+
+  /**
+   * Get a specific document with authorization check
+   */
+  async getDocumentById(documentId: number, userId: number) {
+    // Get the client record
+    const client = await this.prisma.client.findUnique({
+      where: { userId }
+    });
+
+    if (!client) {
+      throw new ForbiddenException('Client non trouvé');
+    }
+
+    // Get the document
+    const document = await this.prisma.document.findUnique({
+      where: { id: documentId },
+      include: {
+        client: true
+      }
+    });
+
+    if (!document) {
+      throw new NotFoundException('Document non trouvé');
+    }
+
+    // Check if document belongs to this client
+    if (document.clientId !== client.id) {
+      throw new ForbiddenException('Vous n\'avez pas accès à ce document');
+    }
+
+    return document;
+  }
+
+  /**
+   * Get documents statistics for a client
+   */
+  async getClientDocumentsStats(userId: number) {
+    const client = await this.prisma.client.findUnique({
+      where: { userId }
+    });
+
+    if (!client) {
+      throw new ForbiddenException('Client non trouvé');
+    }
+
+    const totalDocuments = await this.prisma.document.count({
+      where: { clientId: client.id }
+    });
+
+    const documentsByType = await this.prisma.document.groupBy({
+      by: ['typeDocument'],
+      where: { clientId: client.id },
+      _count: true
+    });
+
+    const recentDocuments = await this.prisma.document.findMany({
+      where: { clientId: client.id },
+      orderBy: { dateUpload: 'desc' },
+      take: 5,
+      select: {
+        id: true,
+        nomOriginal: true,
+        typeDocument: true,
+        dateUpload: true
+      }
+    });
+
+    return {
+      totalDocuments,
+      documentsByType,
+      recentDocuments
     };
   }
 

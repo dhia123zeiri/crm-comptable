@@ -7,7 +7,12 @@ import {
   UseGuards, 
   UseInterceptors, 
   UploadedFiles,
-  BadRequestException 
+  BadRequestException, 
+  Get,
+  Param,
+  Res,
+  StreamableFile,
+  NotFoundException
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { DocumentsService } from './documents.service';
@@ -18,6 +23,9 @@ import { Roles } from 'src/auth/role.decorator';
 import { CurrentUser } from 'src/auth/current-user.decorator';
 import type { TokenPayload } from 'src/auth/token-payload.interface';
 import { CreateDocumentsDto } from './dto/documents.dto';
+import { createReadStream } from 'fs';
+import { stat } from 'fs/promises';
+
 
 @Controller('documents')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -125,5 +133,60 @@ export class DocumentsController {
     };
 
     return this.documentsService.uploadDocuments(files, createDocumentsDto, user.userId);
+  }
+
+  @Get('client/my-documents')
+  @Roles(Role.CLIENT)
+  async getClientDocuments(@CurrentUser() user: TokenPayload) {
+    return this.documentsService.getClientDocuments(user.userId);
+  }
+
+  /**
+   * Get a specific document by ID
+   */
+  @Get(':id')
+  @Roles(Role.CLIENT)
+  async getDocumentById(
+    @Param('id') id: string,
+    @CurrentUser() user: TokenPayload
+  ) {
+    return this.documentsService.getDocumentById(parseInt(id), user.userId);
+  }
+
+  /**
+   * Download a document
+   */
+  @Get(':id/download')
+  @Roles(Role.CLIENT)
+  async downloadDocument(
+    @Param('id') id: string,
+    @CurrentUser() user: TokenPayload,
+    @Res({ passthrough: true }) res: any
+  ): Promise<StreamableFile> {
+    const documentId = parseInt(id);
+    const document = await this.documentsService.getDocumentById(
+      documentId, 
+      user.userId
+    );
+
+    if (!document) {
+      throw new NotFoundException('Document non trouvé');
+    }
+
+    // Check if file exists
+    try {
+      await stat(document.chemin);
+    } catch (error) {
+      throw new NotFoundException('Fichier non trouvé sur le serveur');
+    }
+
+    // Set response headers
+    res.set({
+      'Content-Type': document.typeFichier,
+      'Content-Disposition': `attachment; filename="${encodeURIComponent(document.nomOriginal)}"`,
+    });
+
+    const file = createReadStream(document.chemin);
+    return new StreamableFile(file);
   }
 }

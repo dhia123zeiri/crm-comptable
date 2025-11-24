@@ -2,7 +2,6 @@ import { Body, Controller, Post, UseGuards, Get, Param, Put, Delete, Query, Patc
 import { CurrentUser } from 'src/auth/current-user.decorator';
 import type { TokenPayload } from 'src/auth/token-payload.interface';
 import { CreateTemplateDto, DuplicateTemplateDto, TemplateFiltersDto, UpdateTemplateDto } from './dto/template.request';
-
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
 import { TemplateEmailsService } from './services/template-emails.service';
 
@@ -20,8 +19,6 @@ export class TemplateEmailsController {
         return await this.templateService.create(createTemplateDto, user.userId);
     }
 
-    
-
     @Post(':id/duplicate')
     async duplicate(
         @Param('id') id: string,
@@ -32,11 +29,11 @@ export class TemplateEmailsController {
     }
 
     @Get()
-    async findAll(
-    ) {
+    async findAll() {
         return await this.templateService.findAll();
     }
 
+    // IMPORTANT: All specific routes must come BEFORE parameterized routes like ':id'
     @Get('stats')
     async getStats(
         @CurrentUser() user: TokenPayload
@@ -51,6 +48,15 @@ export class TemplateEmailsController {
         return await this.templateService.getCategories(user.userId);
     }
 
+    // ADD THIS: clients route MUST come before :id route
+    @Get('clients')
+    async getClients(
+        @CurrentUser() user: TokenPayload
+    ) {
+        return await this.templateService.getAvailableClients(user.userId);
+    }
+
+    // This parameterized route MUST come AFTER all specific routes
     @Get(':id')
     async findOne(
         @Param('id') id: string

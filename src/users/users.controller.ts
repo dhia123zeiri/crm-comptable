@@ -16,11 +16,13 @@ export class UsersController {
     createUser(@Body() request: CreateUserRequest){
         return this.usersService.createUser(request);
     }
+
     @Get('me')
     @UseGuards(JwtAuthGuard)
     getMe(@CurrentUser() user: TokenPayload){
         return user;
     }
+    
 }
 
 

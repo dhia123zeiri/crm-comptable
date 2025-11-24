@@ -1,4 +1,4 @@
-import { Body, Controller, Post, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, Post, UseInterceptors } from '@nestjs/common';
 import { NoFilesInterceptor } from '@nestjs/platform-express';
 import { CreateComptableRequest } from './dto/create-comptable.request';
 import { ComptableService } from './comptables.service';

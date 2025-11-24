@@ -450,254 +450,284 @@ export class TemplateEmailsService {
   }
 
   async update(id: number, updateTemplateDto: UpdateTemplateDto, userId?: number) {
-    const currentTemplate = await this.findOne(id);
+  const currentTemplate = await this.findOne(id);
 
-    if (userId) {
-      const comptable = await this.prisma.comptable.findUnique({
-        where: { userId }
-      });
+  if (userId) {
+    const comptable = await this.prisma.comptable.findUnique({
+      where: { userId }
+    });
 
-      if (!comptable) {
-        throw new NotFoundException('Comptable non trouvé pour cet utilisateur');
-      }
-
-      if (currentTemplate.comptableId !== comptable.id) {
-        throw new BadRequestException('Vous n\'avez pas accès à ce template');
-      }
+    if (!comptable) {
+      throw new NotFoundException('Comptable non trouvé pour cet utilisateur');
     }
 
-    if (updateTemplateDto.nom && updateTemplateDto.nom !== currentTemplate.nom) {
-      const existingTemplate = await this.prisma.template.findFirst({
-        where: {
-          nom: updateTemplateDto.nom,
-          comptableId: currentTemplate.comptableId,
+    if (currentTemplate.comptableId !== comptable.id) {
+      throw new BadRequestException('Vous n\'avez pas accès à ce template');
+    }
+  }
+
+  if (updateTemplateDto.nom && updateTemplateDto.nom !== currentTemplate.nom) {
+    const existingTemplate = await this.prisma.template.findFirst({
+      where: {
+        nom: updateTemplateDto.nom,
+        comptableId: currentTemplate.comptableId,
+        id: { not: id }
+      }
+    });
+
+    if (existingTemplate) {
+      throw new BadRequestException('Un template avec ce nom existe déjà');
+    }
+  }
+
+  let nextExecutionAt: Date | undefined;
+  if (updateTemplateDto.cronExpression) {
+    const predefinedCron = getPredefinedCronExpression(updateTemplateDto.cronExpression);
+    const cronToValidate = predefinedCron || updateTemplateDto.cronExpression;
+    
+    const validatedDate = validateCronExpression(cronToValidate);
+    if (!validatedDate) {
+      throw new BadRequestException('Expression cron invalide');
+    }
+    nextExecutionAt = validatedDate;
+  }
+
+  let variables = updateTemplateDto.variables;
+  if (updateTemplateDto.subject || updateTemplateDto.content) {
+    const newSubject = updateTemplateDto.subject || currentTemplate.subject;
+    const newContent = updateTemplateDto.content || currentTemplate.content;
+    
+    const extractedVariables = this.extractVariables(newSubject + ' ' + newContent);
+    variables = [...new Set([...extractedVariables, ...(variables || [])])];
+    
+    if (updateTemplateDto.includeForm || currentTemplate.includeForm) {
+      variables = [...new Set([...variables, 'form_link'])];
+    }
+  }
+
+  return await this.prisma.$transaction(async (prisma) => {
+    let dynamicFormId = currentTemplate.dynamicFormId;
+
+    // Handle dynamic form updates
+    if (updateTemplateDto.includeForm && updateTemplateDto.dynamicForm) {
+      if (updateTemplateDto.dynamicForm.fields) {
+        this.validateFormFields(updateTemplateDto.dynamicForm.fields);
+      }
+
+      if (currentTemplate.dynamicFormId) {
+        const formUpdateData: Prisma.DynamicFormUpdateInput = {
+          dateModification: new Date(),
+        };
+
+        if (updateTemplateDto.dynamicForm.title) {
+          formUpdateData.title = updateTemplateDto.dynamicForm.title;
+        }
+        if (updateTemplateDto.dynamicForm.description !== undefined) {
+          formUpdateData.description = updateTemplateDto.dynamicForm.description;
+        }
+        if (updateTemplateDto.dynamicForm.fields) {
+          formUpdateData.fields = updateTemplateDto.dynamicForm.fields as unknown as Prisma.InputJsonValue;
+        }
+        if (updateTemplateDto.dynamicForm.expirationDays !== undefined) {
+          formUpdateData.expirationDays = updateTemplateDto.dynamicForm.expirationDays;
+        }
+        if (updateTemplateDto.dynamicForm.requiresAuthentication !== undefined) {
+          formUpdateData.requiresAuthentication = updateTemplateDto.dynamicForm.requiresAuthentication;
+        }
+        if (updateTemplateDto.dynamicForm.isActive !== undefined) {
+          formUpdateData.isActive = updateTemplateDto.dynamicForm.isActive;
+        }
+
+        await prisma.dynamicForm.update({
+          where: { id: currentTemplate.dynamicFormId },
+          data: formUpdateData
+        });
+      } else {
+        if (!updateTemplateDto.dynamicForm.title) {
+          throw new BadRequestException('Le titre du formulaire est requis');
+        }
+
+        const newForm = await prisma.dynamicForm.create({
+          data: {
+            title: updateTemplateDto.dynamicForm.title,
+            description: updateTemplateDto.dynamicForm.description,
+            fields: updateTemplateDto.dynamicForm.fields as unknown as Prisma.InputJsonValue,
+            expirationDays: updateTemplateDto.dynamicForm.expirationDays || 30,
+            requiresAuthentication: updateTemplateDto.dynamicForm.requiresAuthentication ?? true,
+            isActive: updateTemplateDto.dynamicForm.isActive ?? true,
+            comptableId: currentTemplate.comptableId,
+          }
+        });
+        dynamicFormId = newForm.id;
+      }
+    } else if (updateTemplateDto.includeForm === false && currentTemplate.dynamicFormId) {
+      const formUsageCount = await prisma.template.count({
+        where: { 
+          dynamicFormId: currentTemplate.dynamicFormId,
           id: { not: id }
         }
       });
 
-      if (existingTemplate) {
-        throw new BadRequestException('Un template avec ce nom existe déjà');
-      }
-    }
-
-    let nextExecutionAt: Date | undefined;
-    if (updateTemplateDto.cronExpression) {
-      const predefinedCron = getPredefinedCronExpression(updateTemplateDto.cronExpression);
-      const cronToValidate = predefinedCron || updateTemplateDto.cronExpression;
-      
-      const validatedDate = validateCronExpression(cronToValidate);
-      if (!validatedDate) {
-        throw new BadRequestException('Expression cron invalide');
-      }
-      nextExecutionAt = validatedDate;
-    }
-
-    let variables = updateTemplateDto.variables;
-    if (updateTemplateDto.subject || updateTemplateDto.content) {
-      const newSubject = updateTemplateDto.subject || currentTemplate.subject;
-      const newContent = updateTemplateDto.content || currentTemplate.content;
-      
-      const extractedVariables = this.extractVariables(newSubject + ' ' + newContent);
-      variables = [...new Set([...extractedVariables, ...(variables || [])])];
-      
-      // Add form_link variable if form is included
-      if (updateTemplateDto.includeForm || currentTemplate.includeForm) {
-        variables = [...new Set([...variables, 'form_link'])];
-      }
-    }
-
-    return await this.prisma.$transaction(async (prisma) => {
-      let dynamicFormId = currentTemplate.dynamicFormId;
-
-      // Handle dynamic form updates
-      if (updateTemplateDto.includeForm && updateTemplateDto.dynamicForm) {
-        if (updateTemplateDto.dynamicForm.fields) {
-          this.validateFormFields(updateTemplateDto.dynamicForm.fields);
-        }
-
-        if (currentTemplate.dynamicFormId) {
-          // Update existing form - ensure title is not undefined
-          const formUpdateData: Prisma.DynamicFormUpdateInput = {
-            dateModification: new Date(),
-          };
-
-          if (updateTemplateDto.dynamicForm.title) {
-            formUpdateData.title = updateTemplateDto.dynamicForm.title;
-          }
-          if (updateTemplateDto.dynamicForm.description !== undefined) {
-            formUpdateData.description = updateTemplateDto.dynamicForm.description;
-          }
-          if (updateTemplateDto.dynamicForm.fields) {
-            formUpdateData.fields = updateTemplateDto.dynamicForm.fields as unknown as Prisma.InputJsonValue;
-          }
-          if (updateTemplateDto.dynamicForm.expirationDays !== undefined) {
-            formUpdateData.expirationDays = updateTemplateDto.dynamicForm.expirationDays;
-          }
-          if (updateTemplateDto.dynamicForm.requiresAuthentication !== undefined) {
-            formUpdateData.requiresAuthentication = updateTemplateDto.dynamicForm.requiresAuthentication;
-          }
-          if (updateTemplateDto.dynamicForm.isActive !== undefined) {
-            formUpdateData.isActive = updateTemplateDto.dynamicForm.isActive;
-          }
-
-          await prisma.dynamicForm.update({
-            where: { id: currentTemplate.dynamicFormId },
-            data: formUpdateData
-          });
-        } else {
-          // Create new form - ensure title is provided
-          if (!updateTemplateDto.dynamicForm.title) {
-            throw new BadRequestException('Le titre du formulaire est requis');
-          }
-
-          const newForm = await prisma.dynamicForm.create({
-            data: {
-              title: updateTemplateDto.dynamicForm.title,
-              description: updateTemplateDto.dynamicForm.description,
-              fields: updateTemplateDto.dynamicForm.fields as unknown as Prisma.InputJsonValue,
-              expirationDays: updateTemplateDto.dynamicForm.expirationDays || 30,
-              requiresAuthentication: updateTemplateDto.dynamicForm.requiresAuthentication ?? true,
-              isActive: updateTemplateDto.dynamicForm.isActive ?? true,
-              comptableId: currentTemplate.comptableId,
-            }
-          });
-          dynamicFormId = newForm.id;
-        }
-      } else if (updateTemplateDto.includeForm === false && currentTemplate.dynamicFormId) {
-        // Remove form association and delete form if not used elsewhere
-        const formUsageCount = await prisma.template.count({
-          where: { 
-            dynamicFormId: currentTemplate.dynamicFormId,
-            id: { not: id }
-          }
+      if (formUsageCount === 0) {
+        await prisma.dynamicForm.delete({
+          where: { id: currentTemplate.dynamicFormId }
         });
-
-        if (formUsageCount === 0) {
-          await prisma.dynamicForm.delete({
-            where: { id: currentTemplate.dynamicFormId }
-          });
-        }
-        dynamicFormId = null;
       }
+      dynamicFormId = null;
+    }
 
-      // Prepare update data without dynamicForm property
-      const { dynamicForm, ...templateUpdateData } = updateTemplateDto;
-      
-      const updatedTemplate = await prisma.template.update({
-        where: { id },
-        data: {
-          ...templateUpdateData,
-          ...(variables && { variables }),
-          ...(nextExecutionAt && { nextExecutionAt }),
-          dynamicFormId: dynamicFormId,
-          includeForm: updateTemplateDto.includeForm ?? currentTemplate.includeForm,
-          dateModification: new Date()
-        }
+    // FIXED: Remove clientIds from templateUpdateData
+    const { dynamicForm, clientIds, sendToAllClients, ...templateUpdateData } = updateTemplateDto;
+    
+    // Update the template WITHOUT clientIds
+    const updatedTemplate = await prisma.template.update({
+      where: { id },
+      data: {
+        ...templateUpdateData,
+        ...(variables && { variables }),
+        ...(nextExecutionAt && { nextExecutionAt }),
+        dynamicFormId: dynamicFormId,
+        includeForm: updateTemplateDto.includeForm ?? currentTemplate.includeForm,
+        dateModification: new Date()
+      }
+    });
+
+    // Handle client updates SEPARATELY using TemplateClient junction table
+    if (clientIds !== undefined) {
+      // Delete all existing associations
+      await prisma.templateClient.deleteMany({
+        where: { templateId: id }
       });
 
-      // Handle client updates
-      if (updateTemplateDto.clientIds !== undefined) {
-        await prisma.templateClient.deleteMany({
-          where: { templateId: id }
-        });
-
-        if (updateTemplateDto.clientIds.length > 0) {
-          const validClients = await prisma.client.findMany({
-            where: {
-              id: { in: updateTemplateDto.clientIds },
-              comptableId: currentTemplate.comptableId
-            }
-          });
-
-          if (validClients.length !== updateTemplateDto.clientIds.length) {
-            throw new BadRequestException('Certains clients sont introuvables ou ne vous appartiennent pas');
+      if (clientIds.length > 0) {
+        // Validate clients belong to comptable
+        const validClients = await prisma.client.findMany({
+          where: {
+            id: { in: clientIds.map(id => parseInt(id.toString())) },
+            comptableId: currentTemplate.comptableId
           }
-
-          const templateClientData = updateTemplateDto.clientIds.map(clientId => ({
-            templateId: id,
-            clientId: clientId
-          }));
-
-          await prisma.templateClient.createMany({
-            data: templateClientData
-          });
-        }
-      } else if (updateTemplateDto.sendToAllClients) {
-        await prisma.templateClient.deleteMany({
-          where: { templateId: id }
         });
 
-        const allClients = await prisma.client.findMany({
-          where: { comptableId: currentTemplate.comptableId },
-          select: { id: true }
-        });
-
-        if (allClients.length > 0) {
-          const templateClientData = allClients.map(client => ({
-            templateId: id,
-            clientId: client.id
-          }));
-
-          await prisma.templateClient.createMany({
-            data: templateClientData
-          });
+        if (validClients.length !== clientIds.length) {
+          throw new BadRequestException('Certains clients sont introuvables ou ne vous appartiennent pas');
         }
+
+        // Create new associations
+        const templateClientData = clientIds.map(clientId => ({
+          templateId: id,
+          clientId: parseInt(clientId.toString())
+        }));
+
+        await prisma.templateClient.createMany({
+          data: templateClientData
+        });
       }
+    } else if (sendToAllClients) {
+      // Delete existing associations
+      await prisma.templateClient.deleteMany({
+        where: { templateId: id }
+      });
 
-      return updatedTemplate;
-    });
-  }
+      // Add all clients
+      const allClients = await prisma.client.findMany({
+        where: { comptableId: currentTemplate.comptableId },
+        select: { id: true }
+      });
+
+      if (allClients.length > 0) {
+        const templateClientData = allClients.map(client => ({
+          templateId: id,
+          clientId: client.id
+        }));
+
+        await prisma.templateClient.createMany({
+          data: templateClientData
+        });
+      }
+    }
+
+    return updatedTemplate;
+  });
+}
 
   async remove(id: number, userId?: number) {
-    const template = await this.findOne(id);
+  const template = await this.findOne(id);
 
-    if (userId) {
-      const comptable = await this.prisma.comptable.findUnique({
-        where: { userId }
+  if (userId) {
+    const comptable = await this.prisma.comptable.findUnique({
+      where: { userId }
+    });
+
+    if (!comptable) {
+      throw new NotFoundException('Comptable non trouvé pour cet utilisateur');
+    }
+
+    if (template.comptableId !== comptable.id) {
+      throw new BadRequestException('Vous ne pouvez pas supprimer ce template');
+    }
+  }
+
+  return await this.prisma.$transaction(async (prisma) => {
+    // 1. Delete all TemplateClient associations
+    await prisma.templateClient.deleteMany({
+      where: { templateId: id }
+    });
+
+    // 2. Delete all DynamicFormResponses linked to EmailLogs of this template
+    await prisma.dynamicFormResponse.deleteMany({
+      where: {
+        emailLog: {
+          templateId: id
+        }
+      }
+    });
+
+    // 3. Delete all EmailLogs for this template
+    await prisma.emailLog.deleteMany({
+      where: { templateId: id }
+    });
+
+    // 4. Remove cron jobs
+    await prisma.jobCron.deleteMany({
+      where: {
+        type: 'ENVOI_EMAIL_TEMPLATE',
+        parametres: {
+          path: ['templateId'],
+          equals: id
+        }
+      }
+    });
+
+    // 5. Handle dynamic form deletion
+    if (template.dynamicFormId) {
+      // Check if other templates use this form
+      const formUsageCount = await prisma.template.count({
+        where: { 
+          dynamicFormId: template.dynamicFormId,
+          id: { not: id }
+        }
       });
 
-      if (!comptable) {
-        throw new NotFoundException('Comptable non trouvé pour cet utilisateur');
-      }
+      // Only delete form if no other templates use it
+      if (formUsageCount === 0) {
+        // Delete any remaining form responses not caught above
+        await prisma.dynamicFormResponse.deleteMany({
+          where: { dynamicFormId: template.dynamicFormId }
+        });
 
-      if (template.comptableId !== comptable.id) {
-        throw new BadRequestException('Vous ne pouvez pas supprimer ce template');
+        // Now safe to delete the form
+        await prisma.dynamicForm.delete({
+          where: { id: template.dynamicFormId }
+        });
       }
     }
 
-    return await this.prisma.$transaction(async (prisma) => {
-      // Remove cron jobs
-      await prisma.jobCron.deleteMany({
-        where: {
-          type: 'ENVOI_EMAIL_TEMPLATE',
-          parametres: {
-            path: ['templateId'],
-            equals: id
-          }
-        }
-      });
-
-      // Check if dynamic form can be deleted
-      if (template.dynamicFormId) {
-        const formUsageCount = await prisma.template.count({
-          where: { 
-            dynamicFormId: template.dynamicFormId,
-            id: { not: id }
-          }
-        });
-
-        if (formUsageCount === 0) {
-          await prisma.dynamicForm.delete({
-            where: { id: template.dynamicFormId }
-          });
-        }
-      }
-
-      return await prisma.template.delete({
-        where: { id }
-      });
+    // 6. Finally, delete the template itself
+    return await prisma.template.delete({
+      where: { id }
     });
-  }
+  });
+}
 
   async toggleStatus(id: number, userId?: number) {
     const template = await this.findOne(id);
@@ -1298,16 +1328,26 @@ export class TemplateEmailsService {
     return categories.map(c => c.category).filter(Boolean);
   }
 
-  async getAvailableClients(userId: number) {
+  // Replace your existing getAvailableClients method with this debug version
+
+async getAvailableClients(userId: number) {
+  try {
+    console.log('🔍 getAvailableClients called with userId:', userId);
+    
     const comptable = await this.prisma.comptable.findUnique({
       where: { userId }
     });
 
+    console.log('👤 Comptable found:', comptable ? `ID: ${comptable.id}` : 'NULL');
+
     if (!comptable) {
+      console.log('❌ No comptable found for userId:', userId);
       throw new NotFoundException('Comptable non trouvé pour cet utilisateur');
     }
 
-    return this.prisma.client.findMany({
+    console.log('🔎 Searching clients for comptableId:', comptable.id);
+
+    const clients = await this.prisma.client.findMany({
       where: { comptableId: comptable.id },
       select: {
         id: true,
@@ -1322,7 +1362,29 @@ export class TemplateEmailsService {
       },
       orderBy: { raisonSociale: 'asc' }
     });
+
+    console.log('📋 Clients found:', clients.length);
+    console.log('📄 First client sample:', clients[0] ? {
+      id: clients[0].id,
+      raisonSociale: clients[0].raisonSociale,
+      hasUser: !!clients[0].user
+    } : 'No clients');
+
+    return clients;
+
+  } catch (error) {
+    console.error('💥 Error in getAvailableClients:', error);
+    
+    // If it's already a NestJS exception, re-throw it
+    if (error instanceof NotFoundException || error instanceof BadRequestException) {
+      throw error;
+    }
+    
+    // For any other error, log it and throw a generic error
+    this.logger.error('Unexpected error in getAvailableClients:', error);
+    throw new BadRequestException('Erreur lors de la récupération des clients');
   }
+}
 
   async getTemplateEmailHistory(templateId: number, page = 1, limit = 10) {
     const skip = (page - 1) * limit;

@@ -7,6 +7,100 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// Enhanced schema to support multi-client dossier creation
+
+// NEW MODEL: Dossier Batch (for creating multiple dossiers at once)
+model DossierBatch {
+  id               Int              @id @default(autoincrement())
+  nom              String           // Base name for the batch
+  description      String?
+  periode          String?          // e.g., "Janvier 2024", "Q1 2024"
+  dateEcheance     DateTime?
+  dateCreation     DateTime         @default(now())
+  dateModification DateTime         @updatedAt
+  comptableId      Int
+  dossierTemplateId Int?
+  comptable        Comptable        @relation(fields: [comptableId], references: [id])
+  dossierTemplate  DossierTemplate? @relation(fields: [dossierTemplateId], references: [id])
+  dossiers         Dossier[]        // Individual dossiers created from this batch
+
+  @@map("dossier_batches")
+}
+
+// MODIFIED MODEL: Dossier - now linked to a batch
+model Dossier {
+  id                Int                 @id @default(autoincrement())
+  nom               String              // Will be generated as "{batch.nom} - {client.raisonSociale}"
+  description       String?
+  periode           String?             // e.g., "Janvier 2024", "Q1 2024"
+  dateEcheance      DateTime?
+  status            StatusDossier       @default(EN_ATTENTE)
+  pourcentage       Float               @default(0) // Completion percentage
+  documentsUpload   Int                 @default(0) // Number of documents uploaded
+  documentsRequis   Int                 @default(0) // Total required documents
+  dateCreation      DateTime            @default(now())
+  dateModification  DateTime            @updatedAt
+  dateCompletion    DateTime?
+  clientId          Int
+  comptableId       Int
+  dossierTemplateId Int?
+  dossierBatchId    Int?                // NEW: Link to batch
+  client            Client              @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  comptable         Comptable           @relation(fields: [comptableId], references: [id])
+  dossierTemplate   DossierTemplate?    @relation(fields: [dossierTemplateId], references: [id])
+  dossierBatch      DossierBatch?       @relation(fields: [dossierBatchId], references: [id])
+  documentRequests  DocumentRequest[]   // Specific document requests for this dossier
+  formulaires       Formulaire[]        // Link to formulaires for this dossier
+
+  @@map("dossiers")
+}
+
+// MODIFIED MODEL: Add batch relation to Comptable
+model Comptable {
+  id               Int            @id @default(autoincrement())
+  userId           Int            @unique
+  cabinet          String
+  specialites      String[]
+  numeroOrdre      String?
+  dateCreation     DateTime       @default(now())
+  dateModification DateTime       @updatedAt
+  clients          Client[]
+  documents        Document[]
+  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  notifications    Notification[]
+  taches           Tache[]
+  templates        Template[]
+  dynamicForms     DynamicForm[]
+  dossierTemplates DossierTemplate[]
+  documentRequests DocumentRequest[]
+  dossiers         Dossier[]
+  dossierBatches   DossierBatch[]      // NEW: Batches created by comptable
+  factures         Facture[]
+
+  @@map("comptables")
+}
+
+// MODIFIED MODEL: Add batch relation to DossierTemplate
+model DossierTemplate {
+  id               Int                        @id @default(autoincrement())
+  nom              String
+  description      String?
+  typeActivite     String?
+  regimeFiscal     String?
+  periode          PeriodeDossier
+  actif            Boolean                    @default(true)
+  dateCreation     DateTime                   @default(now())
+  dateModification DateTime                   @updatedAt
+  comptableId      Int
+  comptable        Comptable                  @relation(fields: [comptableId], references: [id])
+  documentsRequis  DocumentTemplateRequis[]
+  dossiers         Dossier[]
+  dossierBatches   DossierBatch[]             // NEW: Batches using this template
+
+  @@map("dossier_templates")
+}
+
+// Rest of the existing models remain the same...
 model User {
   id               Int        @id @default(autoincrement())
   nom              String
@@ -45,29 +139,76 @@ model Client {
   taches            Tache[]
   templates         TemplateClient[]
   dynamicFormResponses DynamicFormResponse[]
+  dossiers          Dossier[]
+  documentRequests  DocumentRequest[]
+  caisses           Caisse[]         // NEW: Add caisses relation
+  factures          Facture[]
+
 
   @@map("clients")
 }
 
-model Comptable {
-  id               Int            @id @default(autoincrement())
-  userId           Int            @unique
-  cabinet          String
-  specialites      String[]
-  numeroOrdre      String?
-  dateCreation     DateTime       @default(now())
-  dateModification DateTime       @updatedAt
-  clients          Client[]
-  documents        Document[]     // Add this line
-  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  notifications    Notification[]
-  taches           Tache[]
-  templates        Template[]
-  dynamicForms     DynamicForm[]
 
-  @@map("comptables")
+model DocumentTemplateRequis {
+  id                Int             @id @default(autoincrement())
+  dossierTemplateId Int
+  typeDocument      TypeDocument
+  obligatoire       Boolean         @default(true)
+  description       String?
+  quantiteMin       Int             @default(1)
+  quantiteMax       Int?
+  formatAccepte     String[]
+  tailleMaxMo       Int             @default(10)
+  dossierTemplate   DossierTemplate @relation(fields: [dossierTemplateId], references: [id], onDelete: Cascade)
+
+  @@unique([dossierTemplateId, typeDocument])
+  @@map("documents_template_requis")
 }
 
+model DocumentRequest {
+  id               Int                    @id @default(autoincrement())
+  titre            String
+  description      String?
+  typeDocument     TypeDocument
+  obligatoire      Boolean                @default(true)
+  quantiteMin      Int                    @default(1)
+  quantiteMax      Int?
+  formatAccepte    String[]
+  tailleMaxMo      Int                    @default(10)
+  status           StatusDocumentRequest  @default(EN_ATTENTE)
+  dateCreation     DateTime               @default(now())
+  dateEcheance     DateTime?
+  dateCompletion   DateTime?
+  instructions     String?
+  clientId         Int
+  comptableId      Int
+  dossierId        Int?
+  formulaireId     Int?
+  client           Client                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  comptable        Comptable              @relation(fields: [comptableId], references: [id])
+  dossier          Dossier?               @relation(fields: [dossierId], references: [id])
+  formulaire       Formulaire?            @relation(fields: [formulaireId], references: [id])
+  uploads          DocumentUpload[]
+
+  @@map("document_requests")
+}
+
+model DocumentUpload {
+  id                Int             @id @default(autoincrement())
+  documentId        Int
+  documentRequestId Int
+  status            StatusUpload    @default(VALIDE)
+  commentaire       String?
+  dateUpload        DateTime        @default(now())
+  dateValidation    DateTime?
+  document          Document        @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  documentRequest   DocumentRequest @relation(fields: [documentRequestId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, documentRequestId])
+  @@map("document_uploads")
+}
+
+// Include all other existing models...
 model Template {
   nom              String
   subject          String
@@ -99,7 +240,7 @@ model DynamicForm {
   id                   Int                   @id @default(autoincrement())
   title                String
   description          String?
-  fields               Json                  // Array of field definitions
+  fields               Json
   expirationDays       Int                   @default(30)
   requiresAuthentication Boolean             @default(true)
   isActive             Boolean               @default(true)
@@ -115,13 +256,15 @@ model DynamicForm {
 
 model DynamicFormResponse {
   id               Int         @id @default(autoincrement())
-  responses        Json        // Field responses as key-value pairs
+  responses        Json
   status           FormResponseStatus @default(PENDING)
   dateCreation     DateTime    @default(now())
   dateCompletion   DateTime?
   dateExpiration   DateTime
   ipAddress        String?
   userAgent        String?
+  isRead           Boolean     @default(false)  // NEW: Track if comptable has read the response
+  dateRead         DateTime?                    // NEW: When it was read
   clientId         Int
   dynamicFormId    Int
   emailLogId       Int?
@@ -179,9 +322,12 @@ model Formulaire {
   dateExpiration DateTime?
   clientId       Int
   emailLogId     Int?
+  dossierId      Int?
   documents      Document[]
   client         Client           @relation(fields: [clientId], references: [id], onDelete: Cascade)
   emailLog       EmailLog?        @relation(fields: [emailLogId], references: [id])
+  dossier        Dossier?         @relation(fields: [dossierId], references: [id])
+  documentRequests DocumentRequest[]
 
   @@map("formulaires")
 }
@@ -197,13 +343,32 @@ model Document {
   dateUpload       DateTime     @default(now())
   dateModification DateTime     @updatedAt
   clientId         Int
-  comptableId      Int          // Add this field
+  comptableId      Int
   formulaireId     Int?
   client           Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  comptable        Comptable    @relation(fields: [comptableId], references: [id]) // Add this relation
+  comptable        Comptable    @relation(fields: [comptableId], references: [id])
   formulaire       Formulaire?  @relation(fields: [formulaireId], references: [id])
+  uploads          DocumentUpload[]
 
   @@map("documents")
+}
+
+// Add this model to your existing Prisma schema
+
+model Caisse {
+  id               Int      @id @default(autoincrement())
+  nom              String   // Name of the caisse (CNAV, URSSAF, etc.)
+  username         String?  // Username for connection
+  password         String?  // Encrypted password
+  isActive         Boolean  @default(false)
+  dateCreation     DateTime @default(now())
+  dateModification DateTime @updatedAt
+  clientId         Int
+  comptableId      Int
+  client           Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([clientId, nom])
+  @@map("caisses")
 }
 
 model Tache {
@@ -285,6 +450,46 @@ model LogExecution {
   job           JobCron         @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   @@map("logs_execution")
+}
+
+model Facture {
+  id               Int              @id @default(autoincrement())
+  numero           String           @unique // FAC-2024-12-001-00542
+  dateEmission     DateTime         @default(now())
+  dateEcheance     DateTime
+  status           StatusFacture    @default(BROUILLON)
+  notes            String?
+  totalHT          Float            @default(0)
+  totalTVA         Float            @default(0)
+  totalTTC         Float            @default(0)
+  dateCreation     DateTime         @default(now())
+  dateModification DateTime         @updatedAt
+  dateValidation   DateTime?
+  dateEnvoi        DateTime?
+  datePaiement     DateTime?
+  clientId         Int
+  comptableId      Int
+  client           Client           @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  comptable        Comptable        @relation(fields: [comptableId], references: [id])
+  lignes           LigneFacture[]
+
+  @@map("factures")
+}
+
+model LigneFacture {
+  id             Int      @id @default(autoincrement())
+  description    String
+  quantite       Int
+  prixUnitaire   Float
+  tauxTVA        Float    @default(20)
+  montantHT      Float
+  montantTVA     Float
+  montantTTC     Float
+  ordre          Int      @default(0)
+  factureId      Int
+  facture        Facture  @relation(fields: [factureId], references: [id], onDelete: Cascade)
+
+  @@map("lignes_factures")
 }
 
 enum Role {
@@ -400,4 +605,46 @@ enum StatusExecution {
   ERROR
   WARNING
   CANCELLED
+}
+
+enum PeriodeDossier {
+  MENSUEL
+  TRIMESTRIEL
+  SEMESTRIEL
+  ANNUEL
+  PONCTUEL
+}
+
+enum StatusDossier {
+  EN_ATTENTE
+  EN_COURS
+  COMPLET
+  VALIDE
+  REFUSE
+  EXPIRE
+}
+
+enum StatusDocumentRequest {
+  EN_ATTENTE
+  RECU
+  VALIDE
+  REFUSE
+  EXPIRE
+}
+
+enum StatusUpload {
+  VALIDE
+  EN_REVISION
+  REFUSE
+  REMPLACE
+}
+
+
+enum StatusFacture {
+  BROUILLON
+  VALIDEE
+  ENVOYEE
+  PAYEE
+  ANNULEE
+  EN_RETARD
 }

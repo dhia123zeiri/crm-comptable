@@ -859,6 +859,8 @@ export class DynamicFormsService {
         }
   }
 
+// Dans dynamic-forms.service.ts
+
 async handleSubmitForm(
   token: string,
   submitData: FormSubmissionDto,
@@ -877,11 +879,32 @@ async handleSubmitForm(
       throw new BadRequestException('Données de formulaire trop volumineuses');
     }
 
+    // Traiter les informations des fichiers si présents
+    const fileMetadata: Record<string, any[]> = {};
+    if (submitData.files) {
+      Object.keys(submitData.files).forEach(fieldLabel => {
+        fileMetadata[fieldLabel] = submitData.files![fieldLabel].map(file => ({
+          originalName: file.originalname,
+          filename: file.filename,
+          path: file.path,
+          mimetype: file.mimetype,
+          size: file.size,
+        }));
+      });
+    }
+
+    // Combiner les réponses avec les métadonnées des fichiers
+    const completeResponses = {
+      ...submitData.responses,
+      ...(Object.keys(fileMetadata).length > 0 && { _uploadedFiles: fileMetadata }),
+    };
+
+    // Utiliser submitData.ipAddress et submitData.userAgent s'ils existent
     const result = await this.templateEmailsService.submitFormResponseSecure(
       token,
-      submitData.responses,
-      clientIp,
-      userAgent
+      completeResponses,
+      submitData.ipAddress || clientIp,
+      submitData.userAgent || userAgent
     );
 
     return {
@@ -891,12 +914,17 @@ async handleSubmitForm(
         responseId: result.id,
         dateCompletion: result.dateCompletion,
         client: result.client.raisonSociale,
+        ...(Object.keys(fileMetadata).length > 0 && { 
+          filesUploaded: fileMetadata,
+          totalFiles: Object.values(fileMetadata).reduce((sum, files) => sum + files.length, 0)
+        }),
       },
     };
   } catch (error) {
     if (error instanceof NotFoundException || error instanceof BadRequestException) {
       throw error;
     }
+    this.logger.error('Error submitting form:', error);
     throw new BadRequestException('Erreur lors de la soumission du formulaire');
   }
 }
